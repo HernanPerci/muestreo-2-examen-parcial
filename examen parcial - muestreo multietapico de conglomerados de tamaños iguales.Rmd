@@ -1,0 +1,274 @@
+---
+title: "Examen Parcial - Aplicacion del muestreo multietapico de conglomerados de tamaños iguales"
+author: "Hernan Perci Nuñez Palomino - Oliver Polin Espejo - Susan Villaorduña"
+date: "Ultima edicion `r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  M: 5
+  m: 2
+  n: 2
+  costo_maximo: 100
+---
+
+<style>
+#TOC {
+  color: #708090;
+  font-family: Calibri;
+  font-size: 16px;
+  border-color: #708090;
+}
+body {
+  color: #708090;
+  font-family: Calibri;
+  background-color: #F5F5F5;
+}
+pre {
+  color: #708090;
+  background-color: #F8F8FF;
+}
+#header {
+  color: #800000;
+  background-color: #F5F5F5;
+  opacity: 1;
+  font-family: Calibri;
+  font-size: 20px;
+}
+h1.title {
+  color: #800000;
+  background-color: #F5F5F5;
+  opacity: 1;
+  font-family: Calibri;
+  font-size: 40px;
+}
+h4.author {
+  color: #708090;
+  font-family: Calibri;
+}
+h4.date {
+  color: #708090;
+  font-family: Calibri;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Librerias usadas
+
+```{r cars}
+
+library(tidyverse)
+library(haven)
+library(knitr)
+library(ggthemes)
+library(SDaA)
+library(openxlsx)
+
+```
+
+
+```{r}
+
+bd <- list(NULL)
+
+for (i in c(1:25)) {
+  
+  bd[[i]] <- read_sav(paste(336 + i, "01_IVCENAGRO_REC01.sav", sep = "-"))
+  
+}
+
+```
+
+
+# Base de datos por elemento
+
+```{r}
+
+base_de_datos <- 
+  bind_rows(bd) 
+
+base_de_datos <- base_de_datos %>%
+  mutate(ubigeo_distrito = paste(base_de_datos$P001,
+    base_de_datos$P002, base_de_datos$P003,
+    sep = ""))
+
+data_elemento <- 
+  tibble(Distrito = base_de_datos$ubigeo_distrito,
+    yij = base_de_datos$WSUP14)
+
+data_elemento <- 
+  data_elemento %>%
+  filter(yij > 0)
+
+summary(data_elemento$yij)
+
+data_elemento <-
+  data_elemento %>%
+  mutate(cuartil = case_when(
+    yij <= quantile(data_elemento$yij, 0.25) ~ "1er cuartil",
+    yij > quantile(data_elemento$yij, 0.25) & 
+      yij <= quantile(data_elemento$yij, 0.5) ~ "2do cuartil",
+    yij > quantile(data_elemento$yij, 0.5) & 
+      yij <= quantile(data_elemento$yij, 0.75) ~ "3er cuartil",
+    yij > quantile(data_elemento$yij, 0.75) & 
+      yij <= quantile(data_elemento$yij, 1) ~ "4to cuartil"
+  ))
+
+ggplot(data_elemento, aes(x = yij)) +
+  geom_histogram() +
+  geom_rug(sides = "bl") +
+  labs(x = "Pastos naturales por unidad agropecuaria(has)") +
+  theme_stata() +
+  facet_wrap(~cuartil, scales = "free")
+
+```
+
+
+# Base de datos por conglomerado
+
+```{r, warning = FALSE}
+
+data_conglomerado <-
+  data_elemento %>%
+  select(-cuartil) %>%
+  nest(-Distrito) %>%
+  mutate(Mi = map(data, ~as.numeric(count(.))),
+         Yi = map(data, ~sum(.)), 
+         Yi_prom = map(data, ~mean(unlist(.)))) %>%
+  mutate(Mi = as.numeric(Mi), Yi = as.numeric(Yi), Yi_prom = as.numeric(Yi_prom))
+
+summary(data_conglomerado$Mi)
+
+data_conglomerado <-
+  data_conglomerado %>%
+  mutate(cuartil = case_when(
+    Mi <= quantile(data_conglomerado$Mi, 0.25) ~ "1er cuartil",
+    Mi > quantile(data_conglomerado$Mi, 0.25) & 
+      Mi <= quantile(data_conglomerado$Mi, 0.5) ~ "2do cuartil",
+    Mi > quantile(data_conglomerado$Mi, 0.5) & 
+      Mi <= quantile(data_conglomerado$Mi, 0.75) ~ "3er cuartil",
+    Mi > quantile(data_conglomerado$Mi, 0.75) & 
+      Mi <= quantile(data_conglomerado$Mi, 1) ~ "4to cuartil"
+  ))
+
+ggplot(data_conglomerado, aes(x = Mi)) +
+  geom_bar() +
+  labs(x = "Pastos naturales por Distrito") +
+  theme_stata() +
+  facet_wrap(~cuartil, scales = "free")
+
+```
+
+
+# Seleccion Mi = M = `r params$M`
+
+```{r}
+
+data_conglomerado2 <- 
+  data_conglomerado %>%
+  filter(Mi == params$M) %>%
+  select(-cuartil) 
+
+data_conglomerado2 <- 
+  data_conglomerado2 %>%
+  mutate(S2wi = map(data, ~ var(x = .)), 
+         S2bi = ((Yi - mean(Yi))^2) / (nrow(data_conglomerado2) - 1))
+
+total <- sum(unlist(data_conglomerado2$data))
+cuasivarianza <- var(unlist(data_conglomerado2$data))
+
+kable(unnest(data_conglomerado2, -Distrito), 
+      align = "ccc", 
+      caption = "Tabla 1 Data por conglomerado")
+
+```
+
+
+# calculo de m y n segun costo
+
+  
+```{r}
+
+costos <- expand_grid(
+  c = seq(10, params$costo_maximo, 1),
+  c1 = c,
+  c2 = c
+)
+
+N <- nrow(data_conglomerado2)
+S2_w <- sum(unlist(data_conglomerado2$S2wi)) / N
+S2_b <- sum(data_conglomerado2$S2bi)
+
+calculo_muestra <- 
+  costos %>%
+  mutate(real = case_when(
+    (c1 > c2) & (c >= ((2 * c1) + (4 * c2))) ~ TRUE
+  )) %>%
+  filter(real == TRUE) %>%
+  select(-real) %>%
+  mutate(c1_sobre_c2 = c1 / c2,
+         m = (params$M * sqrt(S2_w) * sqrt(c1_sobre_c2)) / sqrt(S2_b - (params$M * S2_w)), 
+         m_entero = ceiling(m), 
+         n = c / (c1 + (c2*m_entero)), 
+         n_entero = ceiling(n))
+
+tamanio_muestra <-  
+  calculo_muestra %>%
+  filter(m_entero == params$m, n_entero == params$n) %>%
+  arrange(c)
+
+kable(tamanio_muestra, 
+      align = "cccccccc", 
+      caption = paste("Tabla 2 Opciones de costos segun m = ", params$m, " y n = ", params$n))
+
+tamanio_muestra <- tamanio_muestra[1,]
+
+```
+
+
+# muestra
+
+```{r}
+
+set.seed(123)
+muestra_conglomerado <-
+  data_conglomerado2 %>%
+  sample_n(size = params$n, replace = FALSE) %>%
+  mutate(data2 = map(data, ~sample_n(tbl = ., size = params$m)))
+
+muestra_conglomerado <- 
+  muestra_conglomerado %>%
+  mutate(Sij = map(data2, ~sum(.)))
+
+kable(unnest(muestra_conglomerado, -data), 
+      align = "ccccccccc", 
+      caption = "Tabla 3 Muestra yij")
+  
+```
+
+
+# Estimadores
+
+```{r}
+
+f1 <- params$n / N
+f2 <- params$m / params$M
+
+total_estimado <- 
+  sum(unlist(muestra_conglomerado$Sij)) / (f1 * f2)
+
+varianza_total_estimado <- 
+  (((N^2) * S2_b * (1 - f1)) / params$n) + 
+  (((N^2) * (params$M ^2) * (1 - f2) * S2_w) / (params$m * params$n))
+  
+kable(tibble(total, total_estimado, varianza_total_estimado, cuasivarianza), col.names = c("Total", "Total estimado", "Varianza del total estimado", "Cuasivarianza"), align = "cccc", caption = "Tabla 4 Parametros y estimaciones")
+
+```
+
