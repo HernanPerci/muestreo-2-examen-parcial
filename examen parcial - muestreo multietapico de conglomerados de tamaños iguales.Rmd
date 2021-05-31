@@ -1,6 +1,6 @@
 ---
 title: "Examen Parcial - Aplicacion del muestreo multietapico de conglomerados de tamaños iguales"
-author: "Hernan Perci Nuñez Palomino - Oliver Polin Espejo - Susan Villaorduña"
+author: "Hernan Perci Nuñez Palomino"
 date: "Ultima edicion `r format(Sys.time(), '%d %B %Y')`"
 output:
   html_document:
@@ -10,10 +10,13 @@ output:
       collapsed: false
       smooth_scroll: true
 params:
-  M: 5
+  M: 4
   m: 2
-  n: 2
-  costo_maximo: 100
+  n: 5
+  costo_maximo: 1000
+  salto: 10
+  a0: 0.1
+  alpha: 0.05
 ---
 
 <style>
@@ -138,10 +141,10 @@ ggplot(data_elemento, aes(x = yij)) +
 data_conglomerado <-
   data_elemento %>%
   select(-cuartil) %>%
-  nest(-Distrito) %>%
-  mutate(Mi = map(data, ~as.numeric(count(.))),
-         Yi = map(data, ~sum(.)), 
-         Yi_prom = map(data, ~mean(unlist(.)))) %>%
+  nest(Data_Poblacion = -Distrito) %>%
+  mutate(Mi = map(Data_Poblacion, ~as.numeric(count(.))),
+         Yi = map(Data_Poblacion, ~sum(.)), 
+         Yi_prom = map(Data_Poblacion, ~mean(unlist(.)))) %>%
   mutate(Mi = as.numeric(Mi), Yi = as.numeric(Yi), Yi_prom = as.numeric(Yi_prom))
 
 summary(data_conglomerado$Mi)
@@ -178,11 +181,17 @@ data_conglomerado2 <-
 
 data_conglomerado2 <- 
   data_conglomerado2 %>%
-  mutate(S2wi = map(data, ~ var(x = .)), 
+  mutate(S2wi = map(Data_Poblacion, ~ var(x = .)), 
          S2bi = ((Yi - mean(Yi))^2) / (nrow(data_conglomerado2) - 1))
 
-total <- sum(unlist(data_conglomerado2$data))
-cuasivarianza <- var(unlist(data_conglomerado2$data))
+M0 <- sum(data_conglomerado2$Mi)
+Y <- sum(unlist(data_conglomerado2$Data_Poblacion))
+cuasivarianza <- var(unlist(data_conglomerado2$Data_Poblacion))
+
+```
+
+
+```{r}
 
 kable(unnest(data_conglomerado2, -Distrito), 
       align = "ccc", 
@@ -195,9 +204,8 @@ kable(unnest(data_conglomerado2, -Distrito),
 
   
 ```{r}
-
 costos <- expand_grid(
-  c = seq(10, params$costo_maximo, 1),
+  c = seq(10, params$costo_maximo, params$salto),
   c1 = c,
   c2 = c
 )
@@ -223,12 +231,19 @@ tamanio_muestra <-
   calculo_muestra %>%
   filter(m_entero == params$m, n_entero == params$n) %>%
   arrange(c)
+```
 
+
+```{r}
 kable(tamanio_muestra, 
       align = "cccccccc", 
       caption = paste("Tabla 2 Opciones de costos segun m = ", params$m, " y n = ", params$n))
+```
 
+
+```{r}
 tamanio_muestra <- tamanio_muestra[1,]
+tamanio_muestra
 
 ```
 
@@ -236,39 +251,123 @@ tamanio_muestra <- tamanio_muestra[1,]
 # muestra
 
 ```{r}
-
 set.seed(123)
 muestra_conglomerado <-
   data_conglomerado2 %>%
   sample_n(size = params$n, replace = FALSE) %>%
-  mutate(data2 = map(data, ~sample_n(tbl = ., size = params$m)))
+  mutate(data2 = map(Data_Poblacion, ~sample_n(tbl = ., size = params$m)))
 
 muestra_conglomerado <- 
   muestra_conglomerado %>%
   mutate(Sij = map(data2, ~sum(.)))
+```
 
-kable(unnest(muestra_conglomerado, -data), 
+
+```{r}
+kable(unnest(muestra_conglomerado, -Data_Poblacion), 
       align = "ccccccccc", 
       caption = "Tabla 3 Muestra yij")
-  
 ```
 
 
 # Estimadores
 
 ```{r}
-
 f1 <- params$n / N
 f2 <- params$m / params$M
 
-total_estimado <- 
+Y_est <- 
   sum(unlist(muestra_conglomerado$Sij)) / (f1 * f2)
 
-varianza_total_estimado <- 
+varianza_Y_est <- 
   (((N^2) * S2_b * (1 - f1)) / params$n) + 
   (((N^2) * (params$M ^2) * (1 - f2) * S2_w) / (params$m * params$n))
-  
-kable(tibble(total, total_estimado, varianza_total_estimado, cuasivarianza), col.names = c("Total", "Total estimado", "Varianza del total estimado", "Cuasivarianza"), align = "cccc", caption = "Tabla 4 Parametros y estimaciones")
+
+set.seed(123)
+muestra_2da_etapa <- 
+  muestra_conglomerado %>%
+  mutate(m = params$m,
+         yi_prom = map(data2, ~mean(unlist(.))),
+         s2wi = map(data2, ~ var(x = .))) %>%
+  mutate(yi_prom = as.numeric(yi_prom), s2wi = as.numeric(s2wi))
+
+muestra_2da_etapa <-
+  muestra_2da_etapa %>%
+  mutate(Mi_por_yi_prom = Mi*yi_prom)
+
+var_est_Y_est <-
+  (((N^2) * var(muestra_2da_etapa$Mi_por_yi_prom) * (1 - f1)) / params$n) + 
+  (((N^2) * (params$M ^2) * (1 - f2) * (sum(muestra_2da_etapa$s2wi) / params$n)) / (params$m * params$n))
+```
+
+
+```{r}
+kable(tibble(Y, Y_est, varianza_Y_est, cuasivarianza), col.names = c("Total", "Total estimado", "Varianza del total estimado", "Cuasivarianza"), align = "cccc", caption = "Tabla 4 Parametros y estimaciones")
+```
+
+
+## Intervalos de confianza
+
+```{r}
+
+z <- qnorm(1 - (params$alpha / 2),0,1)
+t <- qt(1 - (params$alpha / 2), params$n - 1)
+
+IC_Y_inf <- 
+  ifelse(params$n >= 30, 
+    Y_est - (z * sqrt(var_est_Y_est)), 
+    Y_est - (t * sqrt(var_est_Y_est)))
+
+IC_Y_sup <- 
+  ifelse(params$n >= 30, 
+    Y_est + (z * sqrt(var_est_Y_est)), 
+    Y_est + (t * sqrt(var_est_Y_est)))
+
+IC_Y_raya_inf <- 
+  ifelse(params$n >= 30, 
+    (Y_est / N) - (z * sqrt(var_est_Y_est / (N^2))), 
+    (Y_est / N) - (t * sqrt(var_est_Y_est / (N^2))))
+
+IC_Y_raya_sup <- 
+  ifelse(params$n >= 30, 
+    (Y_est / N) + (z * sqrt(var_est_Y_est / (N^2))), 
+    (Y_est / N) + (t * sqrt(var_est_Y_est / (N^2))))
+
+IC_Y_raya_ele_inf <- 
+  ifelse(params$n >= 30, 
+    (Y_est / M0) - (z * sqrt(var_est_Y_est / (M0^2))), 
+    (Y_est / M0) - (t * sqrt(var_est_Y_est / (M0^2))))
+
+IC_Y_raya_ele_sup <- 
+  ifelse(params$n >= 30, 
+    (Y_est / M0) + (z * sqrt(var_est_Y_est / (M0^2))), 
+    (Y_est / M0) + (t * sqrt(var_est_Y_est / (M0^2))))
+
+
+cv_est <- sqrt(var_est_Y_est) / Y
+cv_est2 <- sqrt(var_est_Y_est / (M0^2)) / (Y / M0)
+
+```
+
+
+```{r}
+
+kable(tibble(c("Total", "Promedio", "Prom elemento"),
+             c(params$a0, params$a0, params$a0), 
+             c(Y, Y / N, Y / M0), 
+             c(Y_est, Y_est / N, Y_est / M0), 
+             c(IC_Y_inf, IC_Y_raya_inf, IC_Y_raya_ele_inf), 
+             c(IC_Y_sup, IC_Y_raya_sup, IC_Y_raya_ele_sup), 
+             c(cv_est, cv_est, cv_est2)),
+      col.names = c("Parametros", 
+                    "CV", 
+                    "Valores", 
+                    "Estimaciones", 
+                    "IC inferior", 
+                    "IC superior", 
+                    "CV estimado"), 
+      align = "ccccccc", 
+      caption = "Tabla intervalos de confianza")
 
 ```
 
